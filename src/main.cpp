@@ -15,11 +15,11 @@ BasicStepperDriver stepper(STEPPER_STEP_TURN, STEPPER_DIR, STEPPER_STEP, STEPPER
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 // If using software SPI (the default case):
-#define OLED_MOSI   5
-#define OLED_CLK    6
-#define OLED_DC     7
-#define OLED_CS     8
-#define OLED_RESET  9
+#define OLED_MOSI   6
+#define OLED_CLK    7
+#define OLED_DC     8
+#define OLED_CS     9
+#define OLED_RESET  -1
 Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 
 #include <ClickEncoder.h>
@@ -28,9 +28,9 @@ Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 int16_t oldEncPos, encPos;
 uint8_t buttonState;
 
-#define ENCODER_A       10
+#define ENCODER_A       12
 #define ENCODER_B       11
-#define ENCODER_BUTTON  12
+#define ENCODER_BUTTON  10
 #define ENCODER_STEPS   1
 
 ClickEncoder encoder(ENCODER_A, ENCODER_B, ENCODER_BUTTON, ENCODER_STEPS);
@@ -44,6 +44,17 @@ ClickEncoder encoder(ENCODER_A, ENCODER_B, ENCODER_BUTTON, ENCODER_STEPS);
 #define PUMP_ANGLE_PER_ML -270 //deg turn of a pomp motor doses one milliliter of fluid
 
 bool pumping = false;
+
+int fluidTempAvg = 0; //for averaging out
+int fluidTempChange = 0; // for hysteresis
+
+#define FLUID_TEMP_RANGE 2 //dongrees science
+
+int fluidTempWarm = 0;
+int fluidTempCold = -10;
+
+int radTempAvg = 0; //for averaging out
+int fanOnRadTemp = 50;
 
 void pump(int ml) {
     stepper.enable();
@@ -71,8 +82,22 @@ void timerIsr() {
   encoder.service();
 }
 
+int thermToTemp(int therm) {
+    //TODO
+    return 0;
+}
+
+void fanLoop() {
+    radTempAvg = (4 * radTempAvg + analogRead(THERM_RAD_PIN)) / 5;
+    if (thermToTemp(radTempAvg) > fanOnRadTemp) {
+        digitalWrite(FAN_PIN, HIGH);
+    } else {
+        digitalWrite(FAN_PIN, LOW);
+    }
+}
+
 void setup() {
-  Serial.begin(9600);
+    Serial.begin(9600);
 
     //PUMP
     //stepper/pump initialization
@@ -92,6 +117,17 @@ void setup() {
     Timer1.attachInterrupt(timerIsr);
 
     encoder.setAccelerationEnabled(true);
+
+    //set initial averages for temperature reading
+    for (int i = 0; i < 4; i++) {
+        fluidTempAvg += analogRead(THERM_FLUID_PIN);
+        delay(10);
+        radTempAvg += analogRead(THERM_RAD_PIN);
+        delay(10);
+    }
+
+    fluidTempAvg /= 4;
+    radTempAvg /= 4;
 }
 
 void loop() {
@@ -107,4 +143,10 @@ void loop() {
 
     //stepper service loop
     pumpLoop();
+
+    //turns on a fan, when a radiator temperature goes too high
+    fanLoop();
+
+    //turns peltiers on and off in order to keep a stable fluid temperature
+    // coolerLoop();
 }
