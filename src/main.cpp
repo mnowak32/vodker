@@ -40,8 +40,8 @@ ClickEncoder encoder(ENCODER_A, ENCODER_B, ENCODER_BUTTON, ENCODER_STEPS);
 #define PELTIER_PIN A2
 #define FAN_PIN A3
 
-#define PUMP_RPM 200
-#define PUMP_ANGLE_PER_ML -270 //deg turn of a pomp motor doses one milliliter of fluid
+#define PUMP_RPM 60
+#define PUMP_ANGLE_PER_ML 480 //deg turn of a pomp motor doses one milliliter of fluid (found experimentaly)
 
 bool pumping = false;
 
@@ -56,14 +56,18 @@ int fluidTempCold = -10;
 int radTempAvg = 0; //for averaging out
 int fanOnRadTemp = 50;
 
+int frame = 0; //loop cycle counter (mod 50)
+
 void pump(int ml) {
     stepper.enable();
     pumping = true;
     stepper.startRotate(ml * PUMP_ANGLE_PER_ML);
+    digitalWrite(LED_BUILTIN, HIGH);
 }
 
 void stopPump() {
     stepper.startBrake();
+    digitalWrite(LED_BUILTIN, LOW);
 }
 
 bool isPumpingNow() {
@@ -78,23 +82,40 @@ void pumpLoop() {
     }
 }
 
-void timerIsr() {
-  encoder.service();
-}
+// resistance value at 25 degrees C
+#define THERM_NOMINAL 10000
+// series resistence
+#define THERM_SERIES 10000
+// temp. for nominal resistance (almost always 25 C)
+#define THERM_NOMNAL_TEMP 25   
+// The beta coefficient of the thermistor (usually 3000-4000)
+#define THERM_BCOEFFICIENT 3950
 
 int thermToTemp(int therm) {
-    //TODO
-    return 0;
+    float average = 1023 / therm - 1;
+    average = THERM_SERIES / average;
+    float steinhart;
+    steinhart = average / THERM_NOMINAL;     // (R/Ro)
+    steinhart = log(steinhart);                  // ln(R/Ro)
+    steinhart /= THERM_BCOEFFICIENT;                   // 1/B * ln(R/Ro)
+    steinhart += 1.0 / (THERM_NOMNAL_TEMP + 273.15); // + (1/To)
+    steinhart = 1.0 / steinhart;                 // Invert
+    steinhart -= 273.15;                         // convert to C
+    return (int) steinhart;
 }
 
 void fanLoop() {
-    radTempAvg = (4 * radTempAvg + analogRead(THERM_RAD_PIN)) / 5;
     if (thermToTemp(radTempAvg) > fanOnRadTemp) {
         digitalWrite(FAN_PIN, HIGH);
     } else {
         digitalWrite(FAN_PIN, LOW);
     }
 }
+
+void timerIsr() {
+  encoder.service();
+}
+
 
 void setup() {
     Serial.begin(9600);
@@ -109,7 +130,9 @@ void setup() {
     // by default, we'll generate the high voltage from the 3.3v line internally! (neat!)
     display.begin(SSD1306_SWITCHCAPVCC);
     // Clear the buffer.
-    // display.clearDisplay();
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
     display.display();
 
     //INPUT
@@ -117,6 +140,20 @@ void setup() {
     Timer1.attachInterrupt(timerIsr);
 
     encoder.setAccelerationEnabled(true);
+
+    //other pins - therm/fan/peltier
+// #define THERM_RAD_PIN A0
+// #define THERM_FLUID_PIN A1
+// #define PELTIER_PIN A2
+// #define FAN_PIN A3
+
+    pinMode(THERM_RAD_PIN, INPUT);
+    pinMode(THERM_FLUID_PIN, INPUT);
+    pinMode(PELTIER_PIN, OUTPUT);
+    pinMode(FAN_PIN, OUTPUT);
+
+    //debugging
+    pinMode(LED_BUILTIN, OUTPUT);
 
     //set initial averages for temperature reading
     for (int i = 0; i < 4; i++) {
@@ -128,6 +165,22 @@ void setup() {
 
     fluidTempAvg /= 4;
     radTempAvg /= 4;
+
+    digitalWrite(FAN_PIN, HIGH); //fan always on
+}
+
+void screenLoop() {
+    display.clearDisplay();
+    display.setCursor(0,0);
+    display.println("radiator");
+    display.print(radTempAvg);
+    display.print(" -> ");
+    display.println(thermToTemp(radTempAvg));
+    display.println("fluid");
+    display.print(fluidTempAvg);
+    display.print(" -> ");
+    display.println(thermToTemp(fluidTempAvg));
+    display.display();
 }
 
 void loop() {
@@ -141,12 +194,33 @@ void loop() {
         }
     }
 
-    //stepper service loop
     pumpLoop();
 
-    //turns on a fan, when a radiator temperature goes too high
-    fanLoop();
-
-    //turns peltiers on and off in order to keep a stable fluid temperature
-    // coolerLoop();
+    switch(frame) {
+        case 0: //read radiator temperature
+            radTempAvg = (4 * radTempAvg + analogRead(THERM_RAD_PIN)) / 5;
+            break;
+        case 10: //read fluid temperature
+            fluidTempAvg = (4 * fluidTempAvg + analogRead(THERM_FLUID_PIN)) / 5;
+            break;
+        // case 20: //turns on a fan, when a radiator temperature goes too high
+        //     // fanLoop();
+            
+        //     break;
+        case 30: //turns peltiers on and off in order to keep a stable fluid temperature
+            // coolerLoop();
+            if (isPumpingNow()) {
+                digitalWrite(PELTIER_PIN, HIGH);
+            } else if (radTempAvg > 160) { //overtemp protection
+                digitalWrite(PELTIER_PIN, HIGH);
+            } else {
+                digitalWrite(PELTIER_PIN, LOW);
+            }
+            break;
+        case 49: //update screen
+            screenLoop();
+            frame = -1;
+            break;
+    }
+    frame++;
 }
