@@ -40,6 +40,7 @@ ClickEncoder encoder(ENCODER_A, ENCODER_B, ENCODER_BUTTON, ENCODER_STEPS);
 #define PELTIER_PIN A2
 #define FAN_PIN A3
 
+
 #define PUMP_RPM 60
 #define PUMP_ANGLE_PER_ML 480 //deg turn of a pomp motor doses one milliliter of fluid (found experimentaly)
 
@@ -83,18 +84,18 @@ void pumpLoop() {
 }
 
 // resistance value at 25 degrees C
-#define THERM_NOMINAL 10000
+#define THERM_NOMINAL 10000.0
 // series resistence
-#define THERM_SERIES 10000
+#define THERM_SERIES 10000.0
 // temp. for nominal resistance (almost always 25 C)
-#define THERM_NOMNAL_TEMP 25   
+#define THERM_NOMNAL_TEMP 25.0
 // The beta coefficient of the thermistor (usually 3000-4000)
-#define THERM_BCOEFFICIENT 3950
+#define THERM_BCOEFFICIENT 3950.0
 
 int thermToTemp(int therm) {
-    float average = 1023 / therm - 1;
+    double average = 1023.0 / therm - 1;
     average = THERM_SERIES / average;
-    float steinhart;
+    double steinhart;
     steinhart = average / THERM_NOMINAL;     // (R/Ro)
     steinhart = log(steinhart);                  // ln(R/Ro)
     steinhart /= THERM_BCOEFFICIENT;                   // 1/B * ln(R/Ro)
@@ -115,7 +116,6 @@ void fanLoop() {
 void timerIsr() {
   encoder.service();
 }
-
 
 void setup() {
     Serial.begin(9600);
@@ -217,7 +217,7 @@ void loop() {
                 digitalWrite(PELTIER_PIN, LOW);
             }
             break;
-        case 49: //update screen
+        case 99: //update screen
             screenLoop();
             frame = -1;
             break;
