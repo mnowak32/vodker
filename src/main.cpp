@@ -67,13 +67,14 @@ int fanOnRadTemp = 50;
 
 int frame = 0; //loop cycle counter (mod 50)
 
-int stepperTotalTime = 0, stepperCurrentTime = 0;
+long stepperTotalSteps = 1, stepperCompleteSteps = 0;
+int pumpPerc = 0;
 
 void pump(int ml) {
     stepper.enable();
-    pumping = true;
     stepper.startRotate(ml * PUMP_ANGLE_PER_ML);
-    stepperTotalTime = stepper.nextAction();
+    stepperTotalSteps = stepper.getStepsRemaining();
+    pumping = true;
     digitalWrite(LED_BUILTIN, HIGH);
 }
 
@@ -87,8 +88,10 @@ bool isPumpingNow() {
 }
 
 void pumpLoop() {
-    stepperCurrentTime = stepper.nextAction();
-    if (stepperCurrentTime == 0) {
+    int wait = stepper.nextAction();
+    stepperCompleteSteps = stepper.getStepsCompleted();
+    pumpPerc = stepperCompleteSteps * 100 / stepperTotalSteps;
+    if (wait == 0) {
         stepper.disable();
         pumping = false;
         blinking = 10;
@@ -182,17 +185,20 @@ void setup() {
     digitalWrite(FAN_PIN, HIGH); //fan always on
 
     ring.Begin();
+
+    ring.SetPixelColor(0, RgbColor(100, 50, 60));
     ring.Show();
+
+    delay(3000);
 
 }
 
 void screenLoop() {
     display.clearDisplay();
     display.setCursor(0,0);
-    display.println("radiator");
-    display.print(radTempAvg);
-    display.print(" -> ");
-    display.println(thermToTemp(radTempAvg));
+    display.println("pump ");
+    display.print(pumpPerc);
+    display.println(" %");
     display.println("fluid");
     display.print(fluidTempAvg);
     display.print(" -> ");
@@ -219,8 +225,7 @@ void showProgress(int percent) {
 
 void ledLoop() {
     if (pumping) { //show progress
-        int perc = stepperCurrentTime * 100 / stepperTotalTime;
-        showProgress(perc);
+        showProgress(pumpPerc);
     } else if (blinking) {
         blinking--;
     } else { //slowly pulse colors
