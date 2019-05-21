@@ -35,6 +35,12 @@ uint8_t buttonState;
 
 ClickEncoder encoder(ENCODER_A, ENCODER_B, ENCODER_BUTTON, ENCODER_STEPS);
 
+#include <NeoPixelBus.h>
+#define LED_PIN 1
+#define LED_COUNT 12
+
+NeoPixelBus<NeoGrbFeature, Neo800KbpsMethod> ring(LED_COUNT, LED_PIN);
+
 #define THERM_RAD_PIN A0
 #define THERM_FLUID_PIN A1
 #define PELTIER_PIN A2
@@ -43,7 +49,10 @@ ClickEncoder encoder(ENCODER_A, ENCODER_B, ENCODER_BUTTON, ENCODER_STEPS);
 #define PUMP_RPM 60
 #define PUMP_ANGLE_PER_ML 480 //deg turn of a pomp motor doses one milliliter of fluid (found experimentaly)
 
+
 bool pumping = false;
+int blinking = 0;
+int pulseCounter = 0;
 
 int fluidTempAvg = 0; //for averaging out
 int fluidTempChange = 0; // for hysteresis
@@ -58,10 +67,13 @@ int fanOnRadTemp = 50;
 
 int frame = 0; //loop cycle counter (mod 50)
 
+int stepperTotalTime = 0, stepperCurrentTime = 0;
+
 void pump(int ml) {
     stepper.enable();
     pumping = true;
     stepper.startRotate(ml * PUMP_ANGLE_PER_ML);
+    stepperTotalTime = stepper.nextAction();
     digitalWrite(LED_BUILTIN, HIGH);
 }
 
@@ -75,10 +87,11 @@ bool isPumpingNow() {
 }
 
 void pumpLoop() {
-    int wait_time = stepper.nextAction();
-    if (wait_time == 0) {
+    stepperCurrentTime = stepper.nextAction();
+    if (stepperCurrentTime == 0) {
         stepper.disable();
         pumping = false;
+        blinking = 10;
     }
 }
 
@@ -167,6 +180,10 @@ void setup() {
     radTempAvg /= 4;
 
     digitalWrite(FAN_PIN, HIGH); //fan always on
+
+    ring.Begin();
+    ring.Show();
+
 }
 
 void screenLoop() {
@@ -181,6 +198,34 @@ void screenLoop() {
     display.print(" -> ");
     display.println(thermToTemp(fluidTempAvg));
     display.display();
+}
+
+RgbColor fullPix(10, 100, 10), blackPix(0, 0, 0);
+
+void showProgress(int percent) {
+    int fullLight = (percent * LED_COUNT) / 100;
+    int rising = (percent * LED_COUNT) % 100;
+    for(int i = 0; i < LED_COUNT; i++) {
+        if (i < fullLight) {
+            ring.SetPixelColor(i, fullPix);
+        } else if (i == fullLight) {
+            ring.SetPixelColor(i, RgbColor(rising / 10, rising, rising / 10));
+        } else {
+            ring.SetPixelColor(i, blackPix);
+        }
+    }
+    ring.Show();
+}
+
+void ledLoop() {
+    if (pumping) { //show progress
+        int perc = stepperCurrentTime * 100 / stepperTotalTime;
+        showProgress(perc);
+    } else if (blinking) {
+        blinking--;
+    } else { //slowly pulse colors
+        showProgress(0);
+    }
 }
 
 void loop() {
@@ -207,6 +252,9 @@ void loop() {
         //     // fanLoop();
             
         //     break;
+        case 25:
+            ledLoop();
+            break;
         case 30: //turns peltiers on and off in order to keep a stable fluid temperature
             // coolerLoop();
             if (isPumpingNow()) {
