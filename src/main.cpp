@@ -35,6 +35,15 @@ uint8_t buttonState;
 
 ClickEncoder encoder(ENCODER_A, ENCODER_B, ENCODER_BUTTON, ENCODER_STEPS);
 
+#include <NeoPixelBus.h>
+#include <NeoPixelAnimator.h>
+#define LED_PIN 1
+#define LED_COUNT 12
+
+NeoPixelBus<NeoGrbFeature, Neo800KbpsMethod> ring(LED_COUNT, LED_PIN);
+RgbColor fullPix(10, 100, 10), blackPix(0, 0, 0);
+NeoPixelAnimator anim(LED_COUNT, NEO_CENTISECONDS);
+
 #define THERM_RAD_PIN A0
 #define THERM_FLUID_PIN A1
 #define PELTIER_PIN A2
@@ -44,7 +53,10 @@ ClickEncoder encoder(ENCODER_A, ENCODER_B, ENCODER_BUTTON, ENCODER_STEPS);
 #define PUMP_RPM 60
 #define PUMP_ANGLE_PER_ML 480 //deg turn of a pomp motor doses one milliliter of fluid (found experimentaly)
 
+
 bool pumping = false;
+int blinking = 0;
+int pulseCounter = 0;
 
 int fluidTempAvg = 0; //for averaging out
 int fluidTempChange = 0; // for hysteresis
@@ -59,16 +71,18 @@ int fanOnRadTemp = 50;
 
 int frame = 0; //loop cycle counter (mod 50)
 
+long stepperTotalSteps = 1, stepperCompleteSteps = 0;
+int pumpPerc = 0;
+
 void pump(int ml) {
     stepper.enable();
-    pumping = true;
     stepper.startRotate(ml * PUMP_ANGLE_PER_ML);
-    digitalWrite(LED_BUILTIN, HIGH);
+    stepperTotalSteps = stepper.getStepsRemaining();
+    pumping = true;
 }
 
 void stopPump() {
     stepper.startBrake();
-    digitalWrite(LED_BUILTIN, LOW);
 }
 
 bool isPumpingNow() {
@@ -76,10 +90,14 @@ bool isPumpingNow() {
 }
 
 void pumpLoop() {
-    int wait_time = stepper.nextAction();
-    if (wait_time == 0) {
+    int wait = stepper.nextAction();
+    stepperCompleteSteps = stepper.getStepsCompleted();
+    pumpPerc = stepperCompleteSteps * 100 / stepperTotalSteps;
+    if (wait == 0) {
         stepper.disable();
         pumping = false;
+        pumpPerc = 0;
+        blinking = 127;
     }
 }
 
@@ -117,12 +135,29 @@ void timerIsr() {
   encoder.service();
 }
 
-void setup() {
-    Serial.begin(9600);
+void SetRandomSeed() {
+    uint32_t seed;
 
+    // random works best with a seed that can use 31 bits
+    // analogRead on a unconnected pin tends toward less than four bits
+    seed = analogRead(8);
+    delay(1);
+
+    for (int shifts = 3; shifts < 31; shifts += 3)
+    {
+        seed ^= analogRead(8) << shifts;
+        delay(1);
+    }
+
+    // Serial.println(seed);
+    randomSeed(seed);
+}
+
+void setup() {
     //PUMP
     //stepper/pump initialization
     stepper.begin(PUMP_RPM, STEPPER_MICROSTEP);
+    stepper.setEnableActiveState(LOW);
     stepper.setSpeedProfile(stepper.LINEAR_SPEED);
     stepper.disable();
 
@@ -167,20 +202,109 @@ void setup() {
     radTempAvg /= 4;
 
     digitalWrite(FAN_PIN, HIGH); //fan always on
+
+    ring.Begin();
+
+    ring.SetPixelColor(0, RgbColor(100, 20, 30));
+    ring.SetPixelColor(3, RgbColor(30, 20, 100));
+    ring.SetPixelColor(7, RgbColor(30, 100, 20));
+    ring.SetPixelColor(9, RgbColor(60, 20, 60));
+    ring.Show();
+
+    delay(1000);
+    ring.ClearTo(blackPix);
+    ring.Show();
+
+    SetRandomSeed();
 }
 
 void screenLoop() {
     display.clearDisplay();
     display.setCursor(0,0);
-    display.println("radiator");
-    display.print(radTempAvg);
-    display.print(" -> ");
-    display.println(thermToTemp(radTempAvg));
+    display.println("pump ");
+    display.print(pumpPerc);
+    display.println(" %");
     display.println("fluid");
     display.print(fluidTempAvg);
     display.print(" -> ");
     display.println(thermToTemp(fluidTempAvg));
     display.display();
+}
+
+void showProgress(int percent) {
+    int fullLight = (percent * LED_COUNT) / 100;
+    int rising = (percent * LED_COUNT) % 100;
+    for(int i = 0; i < LED_COUNT; i++) {
+        if (i < fullLight) {
+            ring.SetPixelColor(i, fullPix);
+        } else if (i == fullLight) {
+            ring.SetPixelColor(i, RgbColor(rising / 10, rising, rising / 10));
+        } else {
+            ring.SetPixelColor(i, blackPix);
+        }
+    }
+    ring.Show();
+}
+
+
+struct VodkaAnimationState
+{
+    RgbColor startingColor;  // the color the animation starts at
+    RgbColor endingColor; // the color the animation will end at
+};
+
+VodkaAnimationState animationState[LED_COUNT];
+// one entry per pixel to match the animation timing manager
+
+void animUpdate(const AnimationParam& param) {
+    // first apply an easing (curve) to the animation
+    // this simulates acceleration to the effect
+    float progress = NeoEase::QuadraticInOut(param.progress);
+
+    // this gets called for each animation on every time step
+    // progress will start at 0.0 and end at 1.0
+    // we use the blend function on the RgbColor to mix
+    // color based on the progress given to us in the animation
+    RgbColor updatedColor = RgbColor::LinearBlend(
+        animationState[param.index].startingColor,
+        animationState[param.index].endingColor,
+        progress);
+    // apply the color to the strip
+    ring.SetPixelColor(param.index, updatedColor);
+}
+
+RgbColor randomColor() {
+    return RgbColor(random(80), random(80), random(80));
+}
+
+void newAnimState() {
+    for(int i = 0; i <LED_COUNT; i++) {
+        animationState[i].startingColor = animationState[i].endingColor;
+        animationState[i].endingColor = randomColor();
+        anim.StartAnimation(i, 200, animUpdate);
+    }
+}
+
+void pulseColors() {
+    if (anim.IsAnimating()) {
+        // the normal loop just needs these two to run the active animations
+        anim.UpdateAnimations();
+        ring.Show();
+    } else {
+        newAnimState();
+    }
+}
+
+void ledLoop() {
+    digitalWrite(LED_BUILTIN, pumping ? HIGH : LOW);
+    if (pumping) { //show progress
+        showProgress(pumpPerc);
+    // } else if (blinking > 0) {
+    //     showProgress((blinking & 8) * 12);
+    //     blinking--;
+    } else { //slowly pulse colors
+        pulseColors();
+    }
 }
 
 void loop() {
@@ -207,6 +331,9 @@ void loop() {
         //     // fanLoop();
             
         //     break;
+        case 25:
+            ledLoop();
+            break;
         case 30: //turns peltiers on and off in order to keep a stable fluid temperature
             // coolerLoop();
             if (isPumpingNow()) {
